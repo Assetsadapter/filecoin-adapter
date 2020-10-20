@@ -18,19 +18,18 @@ package filecoin
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"math/big"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
-
 	"github.com/blocktree/filecoin-adapter/filecoinTransaction"
 	"github.com/blocktree/openwallet/v2/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/filecoin-project/go-address"
 	"github.com/filecoin-project/specs-actors/actors/builtin"
+	"github.com/shopspring/decimal"
+	"math/big"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/blocktree/openwallet/v2/openwallet"
 	"github.com/prometheus/common/log"
@@ -79,8 +78,8 @@ func (decoder *TransactionDecoder) SubmitRawTransaction(wrapper openwallet.Walle
 
 	decoder.wm.Log.Info("nonce : ", nonceUint, " update from : ", from)
 
-	message, err := filecoinTransaction.NewMessageFromJSON(rawTx.RawHex)
-	if err != nil {
+	message, err := filecoinTransaction.NewMessageFromJSON( rawTx.RawHex )
+	if err!=nil {
 		return nil, fmt.Errorf("transaction is not wrong message format")
 	}
 
@@ -121,7 +120,7 @@ func (decoder *TransactionDecoder) SubmitRawTransaction(wrapper openwallet.Walle
 
 func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.WalletDAI, rawTx *openwallet.RawTransaction) error {
 	var (
-		feeInfo *txFeeInfo
+		feeInfo         *txFeeInfo
 	)
 
 	addresses, err := wrapper.GetAddressList(0, -1, "AccountID", rawTx.Account.AccountID)
@@ -150,10 +149,6 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 		if err != nil {
 			return err
 		}
-		// 判定地址余额是否大于提币金额，如金额不足则跳过地址
-		if balance.Balance.Cmp(amountBigInt) < 0 {
-			continue
-		}
 		nonce_onchain, err := decoder.wm.GetAddrOnChainNonce(addr.Address)
 		if err != nil {
 			return err
@@ -162,7 +157,7 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 		balance.Nonce = nonce
 
 		//计算手续费
-		feeInfo, err = decoder.wm.GetTransactionFeeEstimated(addr.Address, to, amountBigInt, nil)
+		feeInfo, err = decoder.wm.GetTransactionFeeEstimated(addr.Address, to, amountBigInt, nonce)
 		if err != nil {
 			continue
 		}
@@ -236,7 +231,7 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 		Nonce:   "0x" + strconv.FormatUint(nonce, 16),
 		Address: addr,
 		Message: message,
-		RSV:     true,
+		RSV : true,
 	}
 
 	keySigs = append(keySigs, &signature)
@@ -333,8 +328,8 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 	var (
 		rawTxArray      = make([]*openwallet.RawTransaction, 0)
 		accountID       = sumRawTx.Account.AccountID
-		minTransfer     = big.NewInt(int64(convertFromAmount(sumRawTx.MinTransfer, decoder.wm.Decimal())))
-		retainedBalance = big.NewInt(int64(convertFromAmount(sumRawTx.RetainedBalance, decoder.wm.Decimal())))
+		minTransfer     = ConvertFromAmount(sumRawTx.MinTransfer, decoder.wm.Decimal())
+		retainedBalance = ConvertFromAmount(sumRawTx.RetainedBalance, decoder.wm.Decimal())
 	)
 
 	if minTransfer.Cmp(retainedBalance) < 0 {
@@ -362,10 +357,21 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 		return nil, err
 	}
 
+	//地址余额从大到小排序
+	sort.Slice(addrBalanceArray, func(i int, j int) bool {
+		a_amount, _ := decimal.NewFromString(addrBalanceArray[i].Balance)
+		b_amount, _ := decimal.NewFromString(addrBalanceArray[j].Balance)
+		if a_amount.LessThan(b_amount) {
+			return true
+		} else {
+			return false
+		}
+	})
+
 	for _, addrBalance := range addrBalanceArray {
 
 		//检查余额是否超过最低转账
-		addrBalance_BI := big.NewInt(int64(convertFromAmount(addrBalance.Balance, decoder.wm.Decimal())))
+		addrBalance_BI := ConvertFromAmount(addrBalance.Balance, decoder.wm.Decimal())
 
 		if addrBalance_BI.Cmp(minTransfer) < 0 {
 			continue
@@ -375,9 +381,31 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 		sumAmount_BI := new(big.Int)
 		sumAmount_BI.Sub(addrBalance_BI, retainedBalance)
 
-		//decoder.wm.Log.Debug("sumAmount:", sumAmount)
+		nonce_db, _ := wrapper.GetAddressExtParam(addrBalance.Address, addrBalance.Symbol + "-nonce")
+		if nonce_db != nil {
+			nonceStr := common.NewString(nonce_db)
+			nonceStrArr := strings.Split(string(nonceStr), "_")
+			if len(nonceStrArr)>1 {
+				saveTime := common.NewString(nonceStrArr[1]).UInt64()	//上次汇总此地址的时间，秒为单位
+				now := uint64(time.Now().Unix())
+				diff, _ := math.SafeSub(now, saveTime)
+
+				if diff < decoder.wm.Config.LessSumDiff {	// 少于配置的时间，就不要汇总此地址了
+					decoder.wm.Log.Std.Error("%v address nonce diff = %d ", addrBalance.Address, diff)
+					continue
+				}
+			}
+		}
+
+		addrOnChainNonce, err := decoder.wm.GetAddrOnChainNonce( addrBalance.Address )
+		if err != nil {
+			decoder.wm.Log.Std.Error("Failed to get nonce when create summay transaction! %v ", addrBalance.Address)
+			continue
+		}
+		nonce := decoder.wm.GetAddressNonce(wrapper, addrBalance.Address, addrOnChainNonce)
+
 		//计算手续费
-		fee, createErr := decoder.wm.GetTransactionFeeEstimated(addrBalance.Address, sumRawTx.SummaryAddress, sumAmount_BI, nil)
+		fee, createErr := decoder.wm.GetTransactionFeeEstimated(addrBalance.Address, sumRawTx.SummaryAddress, sumAmount_BI, nonce)
 		if createErr != nil {
 			//decoder.wm.Log.Std.Error("GetTransactionFeeEstimated from[%v] -> to[%v] failed, err=%v", addrBalance.Address, sumRawTx.SummaryAddress, createErr)
 			return nil, createErr
@@ -401,27 +429,12 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 		sumAmount := common.BigIntToDecimals(sumAmount_BI, decoder.wm.Decimal())
 		fees := common.BigIntToDecimals(fee.Fee, decoder.wm.Decimal())
 
-		nonce_db, _ := wrapper.GetAddressExtParam(addrBalance.Address, addrBalance.Symbol+"-nonce")
-		if nonce_db != nil {
-			nonceStr := common.NewString(nonce_db)
-			nonceStrArr := strings.Split(string(nonceStr), "_")
-			if len(nonceStrArr) > 1 {
-				saveTime := common.NewString(nonceStrArr[1]).UInt64() //上次汇总此地址的时间，秒为单位
-				now := uint64(time.Now().Unix())
-				diff, _ := math.SafeSub(now, saveTime)
-
-				if diff < decoder.wm.Config.LessSumDiff { // 少于配置的时间，就不要汇总此地址了
-					decoder.wm.Log.Std.Error("%v address nonce diff = %d ", addrBalance.Address, diff)
-					continue
-				}
-			}
-		}
-
-		decoder.wm.Log.Debug(
+		decoder.wm.Log.Info(
 			"address : ", addrBalance.Address,
 			" balance : ", addrBalance.Balance,
 			" fees : ", fees,
-			" sumAmount : ", sumAmount)
+			" sumAmount : ", sumAmount,
+			" nonce : ", nonce)
 
 		//创建一笔交易单
 		rawTx := &openwallet.RawTransaction{
@@ -439,7 +452,8 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 			wrapper,
 			rawTx,
 			addrBalance,
-			fee)
+			fee,
+			nonce)
 		if createErr != nil {
 			return nil, createErr
 		}
@@ -450,7 +464,7 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 	return rawTxArray, nil
 }
 
-func (decoder *TransactionDecoder) createRawTransaction(wrapper openwallet.WalletDAI, rawTx *openwallet.RawTransaction, addrBalance *openwallet.Balance, feeInfo *txFeeInfo) error {
+func (decoder *TransactionDecoder) createRawTransaction(wrapper openwallet.WalletDAI, rawTx *openwallet.RawTransaction, addrBalance *openwallet.Balance, feeInfo *txFeeInfo, nonce uint64) error {
 
 	var amountStr, to string
 	for k, v := range rawTx.To {
@@ -474,12 +488,6 @@ func (decoder *TransactionDecoder) createRawTransaction(wrapper openwallet.Walle
 
 	totalFeeDecimal := common.BigIntToDecimals(feeInfo.Fee, decoder.wm.Decimal())
 	rawTx.Fees = totalFeeDecimal.String()
-
-	addrOnChainNonce, err := decoder.wm.GetAddrOnChainNonce(from)
-	if err != nil {
-		return errors.New("Failed to get nonce when create summay transaction!")
-	}
-	nonce := decoder.wm.GetAddressNonce(wrapper, from, addrOnChainNonce)
 
 	nonceJSON := map[string]interface{}{}
 	if len(rawTx.ExtParam) > 0 {
@@ -510,7 +518,7 @@ func (decoder *TransactionDecoder) createRawTransaction(wrapper openwallet.Walle
 		Nonce:   "0x" + strconv.FormatUint(nonce, 16),
 		Address: fromAddr,
 		Message: hash,
-		RSV:     true,
+		RSV: true,
 	}
 
 	keySigs = append(keySigs, &signature)
@@ -541,24 +549,24 @@ func (decoder *TransactionDecoder) CreateSummaryRawTransactionWithError(wrapper 
 }
 
 func (decoder *TransactionDecoder) CreateEmptyRawTransactionAndMessage(from, to, realAmountStr string, nonce uint64, decimals int32, gasPrice, gasLimit *big.Int) (string, string, error) {
-	fromAddr, _ := address.NewFromString(from)
+	fromAddr, _ := address.NewFromString(from )
 	toAddr, _ := address.NewFromString(to)
 
 	valueStr := GetBigIntAmountStr(realAmountStr, decimals)
-	value, _ := filecoinTransaction.BigFromString(valueStr)
+	value, _ := filecoinTransaction.BigFromString( valueStr )
 
 	method := builtin.MethodSend
 
 	msg := filecoinTransaction.Message{
-		To:    toAddr,
-		From:  fromAddr,
-		Value: value,
+		To:       toAddr,
+		From:     fromAddr,
+		Value:    value,
 		//GasPrice: filecoinTransaction.NewInt( uint64(gasPrice.Int64()) ),
-		GasFeeCap:  filecoinTransaction.NewInt(uint64(gasPrice.Int64())),
-		GasPremium: filecoinTransaction.NewInt(uint64(gasPrice.Int64())),
-		Nonce:      nonce,
-		GasLimit:   gasLimit.Int64(),
-		Method:     method,
+		GasFeeCap: filecoinTransaction.NewInt( uint64(gasPrice.Int64()) ),
+		GasPremium: filecoinTransaction.NewInt( uint64(gasPrice.Int64()) ),
+		Nonce:    nonce,
+		GasLimit: gasLimit.Int64(),
+		Method:   method,
 	}
 
 	// 创建空交易单和待签消息

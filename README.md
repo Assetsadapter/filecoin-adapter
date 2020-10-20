@@ -20,26 +20,23 @@
 openwtester包下的测试用例已经集成了openwallet钱包体系，创建conf文件，新建FIL.ini文件，编辑如下内容：
 
 ```ini
-; is scanner block
-isScan = true
-
 #wallet api url
 ServerAPI = "http://xxx.xxx.xxx.xxx:xxxxx/rpc/v0"
 
 # is testnet
-isTestNet = false
+isTestNet = true
 
 # fix gas limit
-fixGasLimit = "2000000"
+fixGasLimit = "1000000"
 
 # fix gas price
-fixGasPrice = "100"
+fixGasPrice = "1"
 
 # accessToken
 accessToken = "xxxxx"
 
 # symbol name
-symbol = "FIL"
+symbol = "TESTFIL"
 
 # decimal
 decimal = 18

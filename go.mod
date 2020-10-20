@@ -1,4 +1,4 @@
-module github.com/Assetsadapter/filecoin-adapter
+module github.com/blocktree/filecoin-adapter
 
 go 1.13
 
