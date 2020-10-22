@@ -85,7 +85,7 @@ func (bs *FILBlockScanner) SetRescanBlockHeight(height uint64) error {
 		return errors.New("block height to rescan must greater than 0.")
 	}
 
-	localBlock, err := bs.wm.GetBlockByHeight(height, false)
+	localBlock, err := bs.wm.GetBlockByHeight(height, true)
 
 	if err != nil {
 		return errors.New("block height can not find in wallet")
@@ -139,6 +139,10 @@ func (bs *FILBlockScanner) ScanBlockTask() {
 		thisRoundHeight := currentHeight
 
 		localBlock, err := bs.wm.GetBlockByHeight(currentHeight, true)
+		if err != nil {
+			bs.wm.Log.Std.Info("block scanner can not get rpc-server block height; unexpected error: %v", err)
+			break
+		}
 		for{
 			if localBlock.Height >= currentHeight{	//如果从rpc获取到的高度，确实等于需要获取的高度
 				break
@@ -147,7 +151,10 @@ func (bs *FILBlockScanner) ScanBlockTask() {
 				bs.wm.Log.Std.Info("block scanner scanning height: %d not found, find next height : %d", currentHeight, nextHeight)
 				currentHeight = nextHeight
 				localBlock, err = bs.wm.GetBlockByHeight(currentHeight, true)
-
+				if err != nil {
+					bs.wm.Log.Std.Info("block scanner can not get rpc-server block height; unexpected error: %v", err)
+					break
+				}
 			}
 		}
 		if err != nil {
@@ -184,7 +191,7 @@ func (bs *FILBlockScanner) ScanBlockTask() {
 				//查找core钱包的RPC
 				bs.wm.Log.Info("block scanner prev block height:", currentHeight)
 
-				localBlock, err = bs.wm.GetBlockByHeight(currentHeight, false)
+				localBlock, err = bs.wm.GetBlockByHeight(currentHeight, true)
 				if err != nil {
 					bs.wm.Log.Std.Error("block scanner can not get prev block; unexpected error: %v", err)
 					break
@@ -537,8 +544,9 @@ func (bs *FILBlockScanner) InitExtractResult(sourceKey string, tx *Transaction, 
 		txExtractData = &openwallet.TxExtractData{}
 	}
 
-	status := "1"
 	reason := ""
+
+	//bs.wm.Log.Std.Info("find_extract_transaction, hash : %v, to: %v, status: %v", tx.Hash, tx.To, tx.Status )
 
 	amount, err := GetRealAmountStr( tx.Value ,bs.wm.Decimal() )
 	if err!=nil {
@@ -576,7 +584,7 @@ func (bs *FILBlockScanner) InitExtractResult(sourceKey string, tx *Transaction, 
 		From:        []string{from + ":" + amount},
 		To:          []string{to + ":" + amount},
 		IsMemo:      true,
-		Status:      status,
+		Status:      tx.Status,
 		Reason:      reason,
 		TxType:      0,
 	}
@@ -701,7 +709,7 @@ func (bs *FILBlockScanner) GetCurrentBlockHeader() (*openwallet.BlockHeader, err
 		return nil, err
 	}
 
-	block, err := bs.wm.GetBlockByHeight(blockHeight, false)
+	block, err := bs.wm.GetBlockByHeight(blockHeight, true)
 	if err != nil {
 		bs.wm.Log.Errorf("get block spec by block number failed, err=%v", err)
 		return nil, err
@@ -735,7 +743,7 @@ func (bs *FILBlockScanner) GetScannedBlockHeader() (*openwallet.BlockHeader, err
 
 		//就上一个区块链为当前区块
 		blockHeight = blockHeight - 1
-		block, err := bs.wm.GetBlockByHeight(blockHeight, false)
+		block, err := bs.wm.GetBlockByHeight(blockHeight, true)
 		if err != nil {
 			bs.wm.Log.Errorf("get block spec by block number failed, err=%v", err)
 			return nil, err
