@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/blocktree/filecoin-adapter/filecoinTransaction"
 	"github.com/blocktree/filecoin-adapter/filecoin_addrdec"
@@ -166,6 +167,11 @@ func (wm *WalletManager) GetBlockByHeight(height uint64, getTxs bool) (*OwBlock,
 		if err != nil {
 			return nil, err
 		}
+		if len( block.Transactions ) > 0 {
+			if block.Transactions[0].Status == "-1" {
+				return nil, errors.New("block has no receipt yet")
+			}
+		}
 	}
 
 	return &block, nil
@@ -245,11 +251,22 @@ func (wm *WalletManager) SetOwBlockTransactions(owBlock *OwBlock) (error){
 				if bigIntOk && amountBigInt.Cmp( big.NewInt(0) )==1 {
 					exitCode, gasUsed, err := wm.GetTransactionReceipt( transaction.Hash )
 					if err != nil {
+						wm.Log.Std.Error("transaction get receipt error, hash : %v, err : %v", itemTransactions[transactinIndex].Hash, err )
 						continue
 					}
 					if exitCode!=OK_ExitCode{
-						continue
+						//continue
+						itemTransactions[transactinIndex].Status = "0"
+						//wm.Log.Std.Info("transaction, hash : %v, to: %v, status: %v", itemTransactions[transactinIndex].Hash, itemTransactions[transactinIndex].To, itemTransactions[transactinIndex].Status )
+					}else{
+						itemTransactions[transactinIndex].Status = "1"
 					}
+					if exitCode==-1{
+						itemTransactions[transactinIndex].Status = "-1"
+					}
+					//if exitCode!=OK_ExitCode{
+					//	continue
+					//}
 
 					//if wm.Config.ignoreCheckBalance==false {
 					//	//判断一下余额是否足够
@@ -429,8 +446,16 @@ func (wm *WalletManager) GetTransactionReceipt(txCid string) (int64, int64, erro
 		return -1, -1, err
 	}
 
-	exitCode := gjson.Get(result.Raw, "ExitCode").Int()
-	gasUsed := gjson.Get(result.Raw, "GasUsed").Int()
+	exitCode := int64(-1)
+	gasUsed := int64(-1)
+	
+	hasCode := gjson.Get(result.Raw, "ExitCode").Exists()
+	if hasCode {
+		exitCode = gjson.Get(result.Raw, "ExitCode").Int()
+		gasUsed = gjson.Get(result.Raw, "GasUsed").Int()
+	}
+
+	//wm.Log.Std.Info("transaction get receipt result, hash : %v, exitCode : %d, result string : ", txCid, exitCode, result.Str )
 
 	return exitCode, gasUsed, nil
 
