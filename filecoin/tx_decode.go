@@ -19,10 +19,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/blocktree/filecoin-adapter/filecoinTransaction"
+	"github.com/Assetsadapter/filecoin-adapter/filecoinTransaction"
 	"github.com/blocktree/openwallet/v2/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/filecoin-project/go-address"
+	"github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/specs-actors/actors/builtin"
 	"github.com/shopspring/decimal"
 	"math/big"
@@ -144,6 +145,7 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 
 	addressesBalanceList := make([]AddrBalance, 0, len(addresses))
 
+	var feeErr error
 	for i, addr := range addresses {
 		balance, err := decoder.wm.GetAddrBalance(addr.Address) //decoder.wm.ApiClient.getBalance(addr.Address, decoder.wm.Config.IgnoreReserve, decoder.wm.Config.ReserveAmount)
 		if err != nil {
@@ -157,15 +159,15 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 		balance.Nonce = nonce
 
 		//计算手续费
-		feeInfo, err = decoder.wm.GetTransactionFeeEstimated(addr.Address, to, amountBigInt, nonce)
-		if err != nil {
+		feeInfo, feeErr = decoder.wm.GetTransactionFeeEstimated(addr.Address, to, amountBigInt, nonce)
+		if feeErr != nil {
 			continue
 		}
 
-		if rawTx.FeeRate != "" {
-			feeInfo.GasPrice = common.StringNumToBigIntWithExp(rawTx.FeeRate, decoder.wm.Decimal())
-			feeInfo.CalcFee()
-		}
+		//if rawTx.FeeRate != "" {
+		//	feeInfo.GasFeeCap = common.StringNumToBigIntWithExp(rawTx.FeeRate, decoder.wm.Decimal())
+		//	feeInfo.CalcFee()
+		//}
 
 		balance.index = i
 		addressesBalanceList = append(addressesBalanceList, *balance)
@@ -175,12 +177,15 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 		return addressesBalanceList[i].Balance.Cmp(addressesBalanceList[j].Balance) >= 0
 	})
 
-	fee := uint64(0)
-	if len(rawTx.FeeRate) > 0 {
-		fee = uint64(decoder.wm.Config.FixedFee) //convertFromAmount(rawTx.FeeRate)
-	} else {
-		fee = uint64(decoder.wm.Config.FixedFee)
+	if feeInfo==nil && feeErr!=nil {
+		return feeErr
 	}
+	fee := feeInfo.Fee.Uint64()
+	//if len(rawTx.FeeRate) > 0 {
+	//	fee = uint64(decoder.wm.Config.FixedFee) //convertFromAmount(rawTx.FeeRate)
+	//} else {
+	//	fee = feeInfo.Fee.Uint64()
+	//}
 
 	from := ""
 	nonce := uint64(0)
@@ -202,15 +207,15 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 	rawTx.SetExtParam("nonce", nonceMap)
 	rawTx.TxAmount = amountStr
 
-	gasprice := common.BigIntToDecimals(feeInfo.GasPrice, decoder.wm.Decimal())
-	rawTx.FeeRate = gasprice.String()
+	gasFeeCap := common.BigIntToDecimals(feeInfo.GasFeeCap, decoder.wm.Decimal())
+	rawTx.FeeRate = gasFeeCap.String()
 
 	totalFeeDecimal := common.BigIntToDecimals(feeInfo.Fee, decoder.wm.Decimal())
 	rawTx.Fees = totalFeeDecimal.String()
 
 	decoder.wm.Log.Debugf("nonce: %d", nonce)
 
-	emptyTrans, message, err := decoder.CreateEmptyRawTransactionAndMessage(from, to, amountStr, nonce, decoder.wm.Decimal(), feeInfo.GasPrice, feeInfo.GasLimit) //.CreateEmptyRawTransactionAndMessage(fromPub, hex.EncodeToString(toPub), amount, nonce, fee, mostHeightBlock)
+	emptyTrans, message, err := decoder.CreateEmptyRawTransactionAndMessage(from, to, amountStr, nonce, decoder.wm.Decimal(), feeInfo) //.CreateEmptyRawTransactionAndMessage(fromPub, hex.EncodeToString(toPub), amount, nonce, fee, mostHeightBlock)
 	if err != nil {
 		return err
 	}
@@ -238,7 +243,7 @@ func (decoder *TransactionDecoder) CreateFilRawTransaction(wrapper openwallet.Wa
 
 	rawTx.Signatures[rawTx.Account.AccountID] = keySigs
 
-	rawTx.FeeRate = big.NewInt(int64(fee)).String()
+	rawTx.FeeRate = big.NewInt(0).SetUint64(fee).String()
 
 	rawTx.IsBuilt = true
 
@@ -407,18 +412,18 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 		//计算手续费
 		fee, createErr := decoder.wm.GetTransactionFeeEstimated(addrBalance.Address, sumRawTx.SummaryAddress, sumAmount_BI, nonce)
 		if createErr != nil {
-			//decoder.wm.Log.Std.Error("GetTransactionFeeEstimated from[%v] -> to[%v] failed, err=%v", addrBalance.Address, sumRawTx.SummaryAddress, createErr)
+			decoder.wm.Log.Std.Error("GetTransactionFeeEstimated from[%v] -> to[%v] failed, err=%v", addrBalance.Address, sumRawTx.SummaryAddress, createErr)
 			return nil, createErr
 		}
 
-		if sumRawTx.FeeRate != "" {
-			fee.GasPrice = common.StringNumToBigIntWithExp(sumRawTx.FeeRate, decoder.wm.Decimal()) //ConvertToBigInt(rawTx.FeeRate, 16)
-			if createErr != nil {
-				decoder.wm.Log.Std.Error("fee rate passed through error, err=%v", createErr)
-				return nil, createErr
-			}
-			fee.CalcFee()
-		}
+		//if sumRawTx.FeeRate != "" {
+		//	fee.GasPrice = common.StringNumToBigIntWithExp(sumRawTx.FeeRate, decoder.wm.Decimal()) //ConvertToBigInt(rawTx.FeeRate, 16)
+		//	if createErr != nil {
+		//		decoder.wm.Log.Std.Error("fee rate passed through error, err=%v", createErr)
+		//		return nil, createErr
+		//	}
+		//	fee.CalcFee()
+		//}
 
 		//减去手续费
 		sumAmount_BI.Sub(sumAmount_BI, fee.Fee)
@@ -430,7 +435,7 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 		fees := common.BigIntToDecimals(fee.Fee, decoder.wm.Decimal())
 
 		decoder.wm.Log.Info(
-			"address : ", addrBalance.Address,
+			"summary_log_1, address : ", addrBalance.Address,
 			" balance : ", addrBalance.Balance,
 			" fees : ", fees,
 			" sumAmount : ", sumAmount,
@@ -455,6 +460,7 @@ func (decoder *TransactionDecoder) CreateSimpleSummaryRawTransaction(wrapper ope
 			fee,
 			nonce)
 		if createErr != nil {
+			decoder.wm.Log.Std.Error("createRawTransaction, err=%v", addrBalance.Address, sumRawTx.SummaryAddress, createErr)
 			return nil, createErr
 		}
 
@@ -483,8 +489,8 @@ func (decoder *TransactionDecoder) createRawTransaction(wrapper openwallet.Walle
 	rawTx.TxTo = []string{to}
 	rawTx.TxAmount = amountStr
 
-	gasprice := common.BigIntToDecimals(feeInfo.GasPrice, decoder.wm.Decimal())
-	rawTx.FeeRate = gasprice.String()
+	gasFeeCap := common.BigIntToDecimals(feeInfo.GasFeeCap, decoder.wm.Decimal())
+	rawTx.FeeRate = gasFeeCap.String()
 
 	totalFeeDecimal := common.BigIntToDecimals(feeInfo.Fee, decoder.wm.Decimal())
 	rawTx.Fees = totalFeeDecimal.String()
@@ -500,7 +506,7 @@ func (decoder *TransactionDecoder) createRawTransaction(wrapper openwallet.Walle
 
 	rawTx.SetExtParam("nonce", nonceJSON)
 
-	emptyTrans, hash, err := decoder.CreateEmptyRawTransactionAndMessage(from, to, amountStr, nonce, decoder.wm.Decimal(), feeInfo.GasPrice, feeInfo.GasLimit) //.CreateEmptyRawTransactionAndMessage(fromAddr.PublicKey, hex.EncodeToString(toPub), amount, nonce, fee, mostHeightBlock)
+	emptyTrans, hash, err := decoder.CreateEmptyRawTransactionAndMessage(from, to, amountStr, nonce, decoder.wm.Decimal(), feeInfo) //.CreateEmptyRawTransactionAndMessage(fromAddr.PublicKey, hex.EncodeToString(toPub), amount, nonce, fee, mostHeightBlock)
 
 	if err != nil {
 		return err
@@ -548,7 +554,7 @@ func (decoder *TransactionDecoder) CreateSummaryRawTransactionWithError(wrapper 
 	return raTxWithErr, nil
 }
 
-func (decoder *TransactionDecoder) CreateEmptyRawTransactionAndMessage(from, to, realAmountStr string, nonce uint64, decimals int32, gasPrice, gasLimit *big.Int) (string, string, error) {
+func (decoder *TransactionDecoder) CreateEmptyRawTransactionAndMessage(from, to, realAmountStr string, nonce uint64, decimals int32, feeInfo *txFeeInfo) (string, string, error) {
 	fromAddr, _ := address.NewFromString(from )
 	toAddr, _ := address.NewFromString(to)
 
@@ -562,10 +568,10 @@ func (decoder *TransactionDecoder) CreateEmptyRawTransactionAndMessage(from, to,
 		From:     fromAddr,
 		Value:    value,
 		//GasPrice: filecoinTransaction.NewInt( uint64(gasPrice.Int64()) ),
-		GasFeeCap: filecoinTransaction.NewInt( uint64(gasPrice.Int64()) ),
-		GasPremium: filecoinTransaction.NewInt( uint64(gasPrice.Int64()) ),
+		GasFeeCap: abi.NewTokenAmount( feeInfo.GasFeeCap.Int64() ),
+		GasPremium: abi.NewTokenAmount( feeInfo.GasPremium.Int64() ),
 		Nonce:    nonce,
-		GasLimit: gasLimit.Int64(),
+		GasLimit: feeInfo.GasLimit.Int64(),
 		Method:   method,
 	}
 

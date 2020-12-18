@@ -55,6 +55,17 @@ type WalletConfig struct {
 	AccessToken string
 	Decimal int32
 	LessSumDiff uint64
+
+	//gasLimit增量值
+	GasLimitAdd *big.Int
+
+	//gasPremium增量值
+	GasPremiumAdd *big.Int
+
+	//gasFeeCap增量值
+	GasFeeCapAdd *big.Int
+
+	NonceDiff uint64
 }
 
 func NewConfig() *WalletConfig {
