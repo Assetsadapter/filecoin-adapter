@@ -741,13 +741,13 @@ func (bs *FILBlockScanner) GetCurrentBlockHeader() (*openwallet.BlockHeader, err
 		return nil, err
 	}
 
-	block, err := bs.wm.GetBlockByHeight(blockHeight, true)
-	if err != nil {
-		bs.wm.Log.Errorf("get block spec by block number failed, err=%v", err)
-		return nil, err
-	}
+	//block, err := bs.wm.GetBlockByHeight(blockHeight, true)
+	//if err != nil {
+	//	bs.wm.Log.Errorf("get block spec by block number failed, err=%v", err)
+	//	return nil, err
+	//}
 
-	return &openwallet.BlockHeader{Height: blockHeight, Hash: block.Hash}, nil
+	return &openwallet.BlockHeader{Height: blockHeight, Hash:""}, nil
 }
 
 //GetScannedBlockHeader 获取已扫高度区块头
